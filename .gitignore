@@ -1,0 +1,21 @@
+# Visual Studio cache / temporary files
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Build output
+bin/
+obj/
+
+# Rider / JetBrains IDE files
+.idea/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# NuGet packages (optional if you restore via nuget)
+*.nupkg
+packages/
