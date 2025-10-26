@@ -30,8 +30,8 @@
         {
             this.components = new System.ComponentModel.Container();
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(1800, 1000);
-            this.Text = "Form1";
+            this.Text = "🏠 Home CCTV Viewer";
+            this.ClientSize = new System.Drawing.Size(1700, 850);
         }
 
         #endregion

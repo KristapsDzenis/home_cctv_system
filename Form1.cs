@@ -1,10 +1,12 @@
-using System;
+﻿using System;
 using System.Drawing;
 using System.IO;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using LibVLCSharp.Shared;
 using LibVLCSharp.WinForms;
+using OpenCvSharp;
+using OpenCvSharp.Extensions;
 
 namespace home_cctv_system
 {
@@ -13,130 +15,129 @@ namespace home_cctv_system
         private LibVLC _libVLC;
         private MediaPlayer _mediaPlayer;
         private VideoView _videoView;
+        private PictureBox _overlayBox;
 
-        private Bitmap _previousFrame;
+        private BackgroundSubtractorMOG2 _bgSubtractor;
+        private bool _alertShown = false;
 
-        private const int BlockSize = 100;       // Size of blocks for motion detection
-        private const int MotionThreshold = 500; // Pixel color difference threshold
-        private const double MotionBlockPercent = 0.9; // Percentage of changed pixels per block
+        private const double MotionThresholdPercent = 0.02;
+        private const int SnapshotIntervalMs = 150; 
 
         public Form1()
         {
             InitializeComponent();
 
-            // VideoView
             _videoView = new VideoView { Dock = DockStyle.Fill };
             Controls.Add(_videoView);
 
-            // LibVLC
-            string exePath = AppDomain.CurrentDomain.BaseDirectory;
-            string vlcLibPath = Path.Combine(exePath, "libvlc", "win-x64");
-            Core.Initialize(vlcLibPath);
+            _overlayBox = new PictureBox
+            {
+                Dock = DockStyle.Fill,
+                BackColor = Color.Transparent,
+                SizeMode = PictureBoxSizeMode.StretchImage
+            };
+            _videoView.Controls.Add(_overlayBox);
+
+            string vlcPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "libvlc", "win-x64");
+            Core.Initialize(vlcPath);
 
             _libVLC = new LibVLC("--vout=direct3d11");
             _mediaPlayer = new MediaPlayer(_libVLC);
             _videoView.MediaPlayer = _mediaPlayer;
 
-            // RTSP
             string rtspUrl = "rtsp://Qz7qJX09:mYNzUjhCmjbHixGj@192.168.0.162:554/live/ch0";
             var media = new Media(_libVLC, rtspUrl, FromType.FromLocation);
             media.AddOption(":rtsp-tcp");
-            media.AddOption(":network-caching=2000");
+            media.AddOption(":network-caching=500");
             _mediaPlayer.Play(media);
 
-            // Start async motion detection
-            StartMotionDetectionLoop();
+            _bgSubtractor = BackgroundSubtractorMOG2.Create(history: 200, varThreshold: 25, detectShadows: false);
+
+            Task.Run(() => MotionDetectionLoop());
         }
 
-        private async void StartMotionDetectionLoop()
+        private async Task MotionDetectionLoop()
         {
+            int warmupFrames = 0;
+
             while (!IsDisposed)
             {
                 try
                 {
-                    Bitmap frame = CaptureSnapshot();
-                    if (frame != null)
+                    string tempPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".png");
+                    _mediaPlayer.TakeSnapshot(0, tempPath, 320, 0);
+
+                    int attempts = 0;
+                    while (!File.Exists(tempPath) && attempts < 10)
                     {
-                        Bitmap displayFrame = (Bitmap)frame.Clone();
-                        bool motionDetected = false;
-
-                        if (_previousFrame != null)
-                        {
-                            motionDetected = DetectMotionAndDrawBlocks(_previousFrame, displayFrame);
-                        }
-
-                        _previousFrame?.Dispose();
-                        _previousFrame = (Bitmap)frame.Clone();
-                        frame.Dispose();
-
-                        _videoView.Invoke((Action)(() =>
-                        {
-                            _videoView.BackgroundImage?.Dispose();
-                            _videoView.BackgroundImage = displayFrame;
-                            this.Text = motionDetected ? "Motion detected!" : "Home CCTV";
-                        }));
+                        await Task.Delay(20);
+                        attempts++;
                     }
-                }
-                catch { }
 
-                await Task.Delay(500);
-            }
-        }
+                    if (!File.Exists(tempPath))
+                        continue;
 
-        private Bitmap CaptureSnapshot()
-        {
-            try
-            {
-                string tempPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".png");
-                _mediaPlayer.TakeSnapshot(0, tempPath, 0, 0);
-                if (File.Exists(tempPath))
-                {
-                    var bmp = new Bitmap(tempPath);
+                    using var mat = Cv2.ImRead(tempPath, ImreadModes.Color);
                     File.Delete(tempPath);
-                    return bmp;
-                }
-            }
-            catch { }
-            return null;
-        }
+                    if (mat.Empty())
+                        continue;
 
-        private bool DetectMotionAndDrawBlocks(Bitmap previous, Bitmap current)
-        {
-            bool motionDetected = false;
-            int width = previous.Width;
-            int height = previous.Height;
+                    Cv2.Resize(mat, mat, new OpenCvSharp.Size(320, mat.Height * 320 / mat.Width));
 
-            using Graphics g = Graphics.FromImage(current);
-            Pen motionPen = new Pen(Color.Red, 2);
+                    using var fgMask = new Mat();
+                    _bgSubtractor.Apply(mat, fgMask);
 
-            for (int y = 0; y < height; y += BlockSize)
-            {
-                for (int x = 0; x < width; x += BlockSize)
-                {
-                    int diffCount = 0;
-                    int pixelsInBlock = 0;
-
-                    for (int by = 0; by < BlockSize && y + by < height; by++)
+                    // Skip first few frames while background model stabilizes
+                    if (warmupFrames < 10)
                     {
-                        for (int bx = 0; bx < BlockSize && x + bx < width; bx++)
+                        warmupFrames++;
+                        await Task.Delay(SnapshotIntervalMs);
+                        continue;
+                    }
+
+                    // Clean noise
+                    Cv2.Threshold(fgMask, fgMask, 200, 255, ThresholdTypes.Binary);
+                    Cv2.MorphologyEx(fgMask, fgMask, MorphTypes.Open, Cv2.GetStructuringElement(MorphShapes.Rect, new OpenCvSharp.Size(3, 3)));
+
+                    var contours = Cv2.FindContoursAsArray(fgMask, RetrievalModes.External, ContourApproximationModes.ApproxSimple);
+
+                    bool motionDetected = false;
+                    var output = mat.Clone();
+
+                    foreach (var contour in contours)
+                    {
+                        var rect = Cv2.BoundingRect(contour);
+                        if (rect.Width * rect.Height > 500) // ignore tiny regions
                         {
-                            Color p = previous.GetPixel(x + bx, y + by);
-                            Color c = current.GetPixel(x + bx, y + by);
-                            int delta = Math.Abs(p.R - c.R) + Math.Abs(p.G - c.G) + Math.Abs(p.B - c.B);
-                            if (delta > MotionThreshold) diffCount++;
-                            pixelsInBlock++;
+                            motionDetected = true;
+                            Cv2.Rectangle(output, rect, new Scalar(0, 0, 255), 2);
                         }
                     }
 
-                    if (diffCount > pixelsInBlock * MotionBlockPercent)
+                    using Bitmap bmp = BitmapConverter.ToBitmap(output);
+                    _overlayBox.Invoke(() =>
                     {
-                        motionDetected = true;
-                        g.DrawRectangle(motionPen, x, y, BlockSize, BlockSize);
-                    }
-                }
-            }
+                        _overlayBox.Image?.Dispose();
+                        _overlayBox.Image = new Bitmap(bmp);
 
-            return motionDetected;
+                        if (motionDetected && !_alertShown)
+                        {
+                            _alertShown = true;
+                            MessageBox.Show("🚨 Motion detected!", "Alert", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        }
+                        else if (!motionDetected)
+                        {
+                            _alertShown = false;
+                        }
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[MotionLoop] {ex.Message}");
+                }
+
+                await Task.Delay(SnapshotIntervalMs);
+            }
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
@@ -144,7 +145,6 @@ namespace home_cctv_system
             _mediaPlayer?.Stop();
             _mediaPlayer?.Dispose();
             _libVLC?.Dispose();
-            _previousFrame?.Dispose();
             base.OnFormClosing(e);
         }
     }
