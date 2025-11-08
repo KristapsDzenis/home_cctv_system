@@ -6,12 +6,13 @@ namespace home_cctv_system
 {
     public partial class Form2 : Form
     {
-        private PictureBox _displayBox;
+        private PictureBox _displayBox;             // picture box for display
 
         public Form2()
         {
-            InitializeComponent();
+            InitializeComponent();// initialize all components
 
+            // display box layout
             _displayBox = new PictureBox
             {
                 Dock = DockStyle.Fill,
@@ -22,6 +23,7 @@ namespace home_cctv_system
             Controls.Add(_displayBox);
         }
 
+        // method to pass current processed bitmap frame into display box
         public void UpdateFrame(Image frame)
         {
             if (IsDisposed) return;
@@ -33,6 +35,7 @@ namespace home_cctv_system
             });
         }
 
+        // function for action when form2 is closing
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             base.OnFormClosing(e);
