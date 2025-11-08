@@ -19,13 +19,17 @@ namespace home_cctv_system
         private MediaPlayer _mediaPlayer1;                  // media player  for camera 1
         private MediaPlayer _mediaPlayer2;                  // media player  for camera 2
 
-        private bool _alert1Shown = false;                  // motion alert bool for camera 1
-        private bool _alert2Shown = false;                  // motion alert bool for camera 2
+        bool recording1 = false;
+        bool recording2 = false;
         private bool _running = true;                       // generic while loop bool for motion detection                  
         public bool Form2Opened = false;                    // generic form 2 active bool
         private Form2 _form2;                               // declare form 2
         public bool Form3Opened = false;                    // generic form 3 active bool
         private Form3 _form3;                               // declare form 3
+        public bool Form4Opened = false;                    // generic form 4 active bool
+        private Form4 _form4;                               // declare form 4
+        private TrackBar volumeBar1;
+        private TrackBar volumeBar2;
 
         private BackgroundSubtractorMOG2 _bgSubtractor1;    // subtractor for motion detection for camera 1( machine learning engine)
         private BackgroundSubtractorMOG2 _bgSubtractor2;    // subtractor for motion detection for camera 2( machine learning engine)
@@ -79,6 +83,20 @@ namespace home_cctv_system
             };         
             layout.Controls.Add(titleLabel2, 1, 0);
 
+             var controlPanel1 = new Panel
+            {
+                Dock = DockStyle.Top,
+                BackColor = Color.LightGray
+            };
+            layout.Controls.Add(controlPanel1, 0, 2);
+
+             var controlPanel2 = new Panel
+            {
+                Dock = DockStyle.Top,
+                BackColor = Color.LightGray
+            };
+            layout.Controls.Add(controlPanel2, 1, 2);
+
             // button group layouts
             var buttonLayout1 = new TableLayoutPanel
             {
@@ -86,14 +104,14 @@ namespace home_cctv_system
                 RowCount = 1,
                 ColumnCount = 3,
             };
-            layout.Controls.Add(buttonLayout1, 0, 2);
+            layout.Controls.Add(buttonLayout1, 0, 3);
             var buttonLayout2 = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 RowCount = 1,
                 ColumnCount = 3,
             };
-            layout.Controls.Add(buttonLayout2, 1, 2);
+            layout.Controls.Add(buttonLayout2, 1, 3);
 
             // button layouts 
             var button = new Button
@@ -130,14 +148,37 @@ namespace home_cctv_system
                 BackColor = Color.White,
                 Font = new System.Drawing.Font("Segoe UI", 14F)
             };
-            button4.Click += Button_Click3;
+            button4.Click += Button_Click4;
             buttonLayout2.Controls.Add(button4, 3, 0);
+
+            volumeBar1 = new TrackBar
+            {
+                Minimum = 0,
+                Maximum = 100,
+                Value = 50,
+                Width = 500,
+                Left = 200,
+                Top = 5
+            };
+            controlPanel1.Controls.Add(volumeBar1);
+
+            volumeBar2 = new TrackBar
+            {
+                Minimum = 0,
+                Maximum = 100,
+                Value = 50,
+                Width = 500,
+                Left = 200,
+                Top = 5
+            };
+            controlPanel2.Controls.Add(volumeBar2);
 
             // adding and setting all layout components to form1 window
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 5F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 90F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 86F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 4F));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 5F));
             buttonLayout1.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33F));
             buttonLayout1.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33F));
@@ -157,6 +198,18 @@ namespace home_cctv_system
             _mediaPlayer2 = new MediaPlayer(_libVLC);
             videoView1.MediaPlayer = _mediaPlayer1;
             videoView2.MediaPlayer = _mediaPlayer2;
+
+            volumeBar1.Scroll += (s, e) =>
+            {
+                if (_mediaPlayer1 != null)
+                    _mediaPlayer1.Volume = volumeBar1.Value;
+            };
+
+            volumeBar2.Scroll += (s, e) =>
+            {
+                if (_mediaPlayer2 != null)
+                    _mediaPlayer2.Volume = volumeBar2.Value;
+            };
 
             // Camera streams from RTSP camera 1 and 2
             var media1 = new Media(_libVLC, cam1_path, FromType.FromLocation);
@@ -256,25 +309,33 @@ namespace home_cctv_system
                     if (camId == 2 && Form3Opened && !_form3.IsDisposed)
                         _form3.UpdateFrame(bmp);
 
-                    bool alertShown = (camId == 1) ? _alert1Shown : _alert2Shown;// local alert shown bool declaretaion based on camera id
-
-                    // if motion detected show alert for camera 1 and camera 2
-                    if (motion && !alertShown)
+                    if (motion)
                     {
-                        if (camId == 1) _alert1Shown = true;
-                        else _alert2Shown = true;
-
-                        this.Invoke(() =>
+                        if (camId == 1 && !recording1)
                         {
-                            MessageBox.Show($"🚨 Camera {camId}: Motion detected!", "Alert",
-                                MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                        });
-                    }
-                    // if no motion detected do not show alert
-                    else if (!motion)
-                    {
-                        if (camId == 1) _alert1Shown = false;
-                        else _alert2Shown = false;
+                            recording1 = true;
+                            string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                            string output = $"C:\\Users\\Krist\\Desktop\\video_recordings\\cam1\\camera1_{timestamp}.mp4";
+
+                            _ = Task.Run(async () =>
+                            {
+                                await RecordClip(cam1_path, output, 30);
+                                recording1 = false;
+                            });
+                        }
+
+                        if (camId == 2 && !recording2)
+                        {
+                            recording2 = true;
+                            string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                            string output = $"C:\\Users\\Krist\\Desktop\\video_recordings\\cam2\\camera2_{timestamp}.mp4";
+
+                            _ = Task.Run(async () =>
+                            {
+                                await RecordClip(cam2_path, output, 30);
+                                recording2 = false;
+                            });
+                        }
                     }
 
                 }
@@ -282,6 +343,29 @@ namespace home_cctv_system
 
                 await Task.Delay(SnapshotIntervalMs);
             }
+        }
+
+        private async Task RecordClip(string rtspUrl, string outputPath, int seconds)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
+
+            using var media = new Media(_libVLC, rtspUrl, FromType.FromLocation);
+
+            // Transcode options: copy both video and audio to MP4
+            media.AddOption($@":sout=#transcode{{vcodec=copy,acodec=copy}}:std{{access=file,mux=mp4,dst=""{outputPath}""}}");
+            media.AddOption(":sout-keep"); // keep streaming active
+
+            using var recorder = new MediaPlayer(_libVLC)
+            {
+                Media = media
+            };
+
+            recorder.Volume = 100;
+            recorder.Play();
+
+            await Task.Delay(seconds * 1000);
+
+            recorder.Stop();
         }
 
         // function to show form2 on button click
@@ -304,11 +388,28 @@ namespace home_cctv_system
             _form3.Show();
         }
 
-        // function placeholder
         private void Button_Click3(object sender, EventArgs e)
         {
-            MessageBox.Show($"Placeholder message", "Alert",
-                                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            string videoFolder = "C:\\Users\\Krist\\Desktop\\video_recordings\\cam1";
+
+            if (_form4 == null || _form4.IsDisposed)
+                _form4 = new Form4(videoFolder);
+
+            
+            Form4Opened = true;
+            _form4.Show();
+        }
+
+        // function placeholder
+        private void Button_Click4(object sender, EventArgs e)
+        {
+            string videoFolder = "C:\\Users\\Krist\\Desktop\\video_recordings\\cam2";
+
+            if (_form4 == null || _form4.IsDisposed)
+                _form4 = new Form4(videoFolder);
+
+            Form4Opened = true;
+            _form4.Show();
         }
 
         // function for action when form1 is closing
