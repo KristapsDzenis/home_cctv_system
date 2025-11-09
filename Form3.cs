@@ -37,10 +37,10 @@ namespace home_cctv_system
         }
 
         // function for action when form2 is closing
-        protected override void OnFormClosing(FormClosingEventArgs e)
-        {
-            base.OnFormClosing(e);
-            Form1.Instance.Form2Opened = false;
-        }
+        //protected override void OnFormClosing(FormClosingEventArgs e)
+        //{
+           // base.OnFormClosing(e);
+           // Form1.Instance.Form2Opened = false;
+        //}
     }
 }
