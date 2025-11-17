@@ -39,7 +39,6 @@ namespace home_cctv_system
             // Switch to recorded view
             liveView.ShowRecordedViewRequested += () =>
             {
-                liveView.MuteAll(true);
                 recordedView.MuteAll(false);
                 liveView.Visible = false;
                 recordedView.Visible = true;
@@ -50,7 +49,6 @@ namespace home_cctv_system
             {
                 recordedView.Visible = false;
                 liveView.Visible = true;
-                liveView.RefreshAudio();
                 recordedView.MuteAll(true);
             };
         }

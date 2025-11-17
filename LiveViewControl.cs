@@ -9,21 +9,33 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using static System.Windows.Forms.DataFormats;
 
-
-
 namespace home_cctv_system
 {
     public partial class LiveViewControl : UserControl
     {
-        // Media player & VLC
+        private LibVLC _relaylibVLC1;
+        private MediaPlayer _relaymediaPlayer1;
+        private LibVLC _relaylibVLC2;
+        private MediaPlayer _relaymediaPlayer2;
+
+        // Playback VLC instances (for UI)
         private LibVLC _libVLC1;
         private LibVLC _libVLC2;
         private MediaPlayer _mediaPlayer1;
         private MediaPlayer _mediaPlayer2;
 
+        // Recorder/snapshot VLC instances (independent)
+        private LibVLC _libVLC3;
+        private LibVLC _libVLC4;
+        private MediaPlayer _mediaPlayer3; // used for snapshots & can be used to spawn recording media
+        private MediaPlayer _mediaPlayer4;
+
         // Volume bars
         private TrackBar volumeBar1;
         private TrackBar volumeBar2;
+
+        private VideoView videoView1;
+        private VideoView videoView2;
 
         // Motion detection
         private BackgroundSubtractorMOG2 _bgSubtractor1;
@@ -34,7 +46,7 @@ namespace home_cctv_system
         private int motion_rectangle_trashhlod = 500;
 
         // Camera paths
-        private string cam1_path = "rtsp://XR1skfPY:5JSy8HsbOqz6AJRA@192.168.0.28:554/live/ch00";
+        private string cam1_path = "rtsp://XR1skfPY:5JSy8HsbOqz6AJRA@192.168.0.28:554/live/ch0";
         private string cam2_path = "rtsp://Qz7qJX09:mYNzUjhCmjbHixGj@192.168.0.162:554/live/ch0";
 
         // Recording flags
@@ -42,10 +54,9 @@ namespace home_cctv_system
         private bool recording2 = false;
         private bool _running = true;
 
-        // References to optional video forms
+        // Optional forms
         public bool Form2Opened { get; private set; } = false;
         public bool Form3Opened { get; private set; } = false;
-        public bool Form4Opened { get; private set; } = false;
         private Form2 _form2;
         private Form3 _form3;
 
@@ -55,139 +66,103 @@ namespace home_cctv_system
 
         public LiveViewControl()
         {
-            //InitializeComponent();
+            InitializeComponent();
             InitializeLiveView();
         }
 
         private void InitializeLiveView()
         {
-            // Initialize LibVLC
+            // Initialize native LibVLC (ensure libvlc folder is present)
             string vlcPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "libvlc", "win-x64");
             Core.Initialize(vlcPath);
+
+            _relaylibVLC1 = new LibVLC("--vout=direct3d11", "--no-osd", "--no-stats");
+            _relaylibVLC2 = new LibVLC("--vout=direct3d11", "--no-osd", "--no-stats");
+
+            // Playback instances (used by VideoView controls)
             _libVLC1 = new LibVLC("--vout=direct3d11", "--no-osd", "--no-stats");
             _libVLC2 = new LibVLC("--vout=direct3d11", "--no-osd", "--no-stats");
 
-            // Base layout
-            var layout = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                BackColor = Color.Black,
-                RowCount = 4,
-                ColumnCount = 2
-            };
-            this.Controls.Add(layout);
+            // Recorder / snapshot instances (independent)
+            _libVLC3 = new LibVLC("--vout=direct3d11", "--no-osd", "--no-video-title-show", "--no-stats");
+            _libVLC4 = new LibVLC("--vout=direct3d11", "--no-osd", "--no-video-title-show", "--no-stats");
 
-            // Titles
-            var titleLabel1 = new Label
-            {
-                Text = "Garden",
-                Dock = DockStyle.Fill,
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 25, FontStyle.Bold),
-                TextAlign = ContentAlignment.MiddleCenter
-            };
-            layout.Controls.Add(titleLabel1, 0, 0);
+            _relaymediaPlayer1 = new MediaPlayer(_relaylibVLC1);
+            _relaymediaPlayer2 = new MediaPlayer(_relaylibVLC2);
 
-            var titleLabel2 = new Label
-            {
-                Text = "Front Door",
-                Dock = DockStyle.Fill,
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 25, FontStyle.Bold),
-                TextAlign = ContentAlignment.MiddleCenter
-            };
-            layout.Controls.Add(titleLabel2, 1, 0);
-
-            // Control panels
-            var controlPanel1 = new Panel { Dock = DockStyle.Top, BackColor = Color.LightGray };
-            layout.Controls.Add(controlPanel1, 0, 2);
-
-            var controlPanel2 = new Panel { Dock = DockStyle.Top, BackColor = Color.LightGray };
-            layout.Controls.Add(controlPanel2, 1, 2);
-
-            // Button layouts
-            var buttonLayout1 = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 1, ColumnCount = 3 };
-            layout.Controls.Add(buttonLayout1, 0, 3);
-
-            var buttonLayout2 = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 1, ColumnCount = 3 };
-            layout.Controls.Add(buttonLayout2, 1, 3);
-
-            // Buttons
-            var buttonMotion1 = new Button { Text = "Motion Test", Dock = DockStyle.Fill, BackColor = Color.White, Font = new Font("Segoe UI", 14F) };
-            buttonMotion1.Click += Button_Click;
-            buttonLayout1.Controls.Add(buttonMotion1, 0, 0);
-
-            var buttonRecorded1 = new Button { Text = "Recorded Video", Dock = DockStyle.Fill, BackColor = Color.White, Font = new Font("Segoe UI", 14F) };
-            buttonRecorded1.Click += Button_Click3;
-            buttonLayout1.Controls.Add(buttonRecorded1, 1, 0);
-
-            var buttonMotion2 = new Button { Text = "Motion Test", Dock = DockStyle.Fill, BackColor = Color.White, Font = new Font("Segoe UI", 14F) };
-            buttonMotion2.Click += Button_Click2;
-            buttonLayout2.Controls.Add(buttonMotion2, 0, 0);
-
-            var buttonRecorded2 = new Button { Text = "Recorded Video", Dock = DockStyle.Fill, BackColor = Color.White, Font = new Font("Segoe UI", 14F) };
-            buttonRecorded2.Click += Button_Click4;
-            buttonLayout2.Controls.Add(buttonRecorded2, 1, 0);
-
-            // Volume bars
-            volumeBar1 = new TrackBar { Minimum = 0, Maximum = 100, Value = 50, Width = 500, Left = 200, Top = 5 };
-            controlPanel1.Controls.Add(volumeBar1);
-
-            volumeBar2 = new TrackBar { Minimum = 0, Maximum = 100, Value = 50, Width = 500, Left = 200, Top = 5 };
-            controlPanel2.Controls.Add(volumeBar2);
-
-            volumeBar1.Scroll += (s, e) => { if (_mediaPlayer1 != null) _mediaPlayer1.Volume = volumeBar1.Value; };
-            volumeBar2.Scroll += (s, e) => { if (_mediaPlayer2 != null) _mediaPlayer2.Volume = volumeBar2.Value; };
-
-            // Layout styling
-            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
-            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 5F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 86F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 4F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 5F));
-
-            buttonLayout1.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33F));
-            buttonLayout1.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33F));
-            buttonLayout1.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33F));
-            buttonLayout2.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33F));
-            buttonLayout2.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33F));
-            buttonLayout2.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33F));
-
-            // VideoViews
-            var videoView1 = new VideoView { Dock = DockStyle.Fill };
-            var videoView2 = new VideoView { Dock = DockStyle.Fill };
-            layout.Controls.Add(videoView1, 0, 1);
-            layout.Controls.Add(videoView2, 1, 1);
-
+            // create playback media players (for UI)
             _mediaPlayer1 = new MediaPlayer(_libVLC1);
             _mediaPlayer2 = new MediaPlayer(_libVLC2);
             videoView1.MediaPlayer = _mediaPlayer1;
             videoView2.MediaPlayer = _mediaPlayer2;
 
-            // Camera streams
-            var media1 = new Media(_libVLC1, cam1_path, FromType.FromLocation);
-            media1.AddOption(":rtsp-tcp");
-            media1.AddOption(":network-caching=2000");
+            // create recorder/snapshot media players (independent)
+            _mediaPlayer3 = new MediaPlayer(_libVLC3); // used for snapshots + independent stream
+            _mediaPlayer4 = new MediaPlayer(_libVLC4);
 
-            var media2 = new Media(_libVLC2, cam2_path, FromType.FromLocation);
-            media2.AddOption(":rtsp-tcp");
-            media2.AddOption(":network-caching=2000");
+            
+            var relayMedia1 = new Media(_relaylibVLC1, cam1_path, FromType.FromLocation);
+            relayMedia1.AddOption(":sout=#duplicate{dst=http{mux=ts,dst=:9101}}");
+            relayMedia1.AddOption(":sout-keep");
+            relayMedia1.AddOption(":rtsp-tcp");
+            relayMedia1.AddOption(":network-caching=2000");
 
-            _mediaPlayer1.Play(media1);
-            _mediaPlayer2.Play(media2);
+            var relayMedia2 = new Media(_relaylibVLC2, cam2_path, FromType.FromLocation);
+            relayMedia2.AddOption(":sout=#duplicate{dst=http{mux=ts,dst=:9102}}");
+            relayMedia2.AddOption(":sout-keep");
+            relayMedia2.AddOption(":rtsp-tcp");
+            relayMedia2.AddOption(":network-caching=2000");
+
+            _relaymediaPlayer1.Play(relayMedia1);
+            _relaymediaPlayer2.Play(relayMedia2);
+
+
+            // Playback media objects (use libvlc1/2)
+            var mediaPlayback1 = new Media(_libVLC1, "http://127.0.0.1:9101", FromType.FromLocation);
+            mediaPlayback1.AddOption(":rtsp-tcp");
+            mediaPlayback1.AddOption(":network-caching=2000");
+
+            var mediaPlayback2 = new Media(_libVLC2, "http://127.0.0.1:9102", FromType.FromLocation);
+            mediaPlayback2.AddOption(":rtsp-tcp");
+            mediaPlayback2.AddOption(":network-caching=2000");
+
+            
+            // Recorder/snapshot media objects (use libvlc3/4) - these run continuously to provide snapshots
+            var mediaRecorderStream1 = new Media(_libVLC3, "http://127.0.0.1:9101", FromType.FromLocation);
+            mediaRecorderStream1.AddOption(":rtsp-tcp");
+            mediaRecorderStream1.AddOption(":network-caching=2000");
+
+            var mediaRecorderStream2 = new Media(_libVLC4, "http://127.0.0.1:9102", FromType.FromLocation);
+            mediaRecorderStream2.AddOption(":rtsp-tcp");
+            mediaRecorderStream2.AddOption(":network-caching=2000");
+
+            // Start playback (UI)
+            _mediaPlayer1.Play(mediaPlayback1);
+            _mediaPlayer2.Play(mediaPlayback2);
             _mediaPlayer1.Mute = false;
             _mediaPlayer2.Mute = false;
 
-            // Motion detection
+            // Start recorder/snapshot streams (these are separate players)
+            _mediaPlayer3.Play(mediaRecorderStream1);
+            _mediaPlayer4.Play(mediaRecorderStream2);
+
+            // Motion detection subtractors
             _bgSubtractor1 = BackgroundSubtractorMOG2.Create(300, 25, false);
             _bgSubtractor2 = BackgroundSubtractorMOG2.Create(300, 25, false);
 
-            Task.Run(() => MotionDetectionLoop(_mediaPlayer1, _bgSubtractor1, 1));
-            Task.Run(() => MotionDetectionLoop(_mediaPlayer2, _bgSubtractor2, 2));
+            // Wait until both recorder players actually start playing frames
+            _mediaPlayer3.Playing += (s, e) =>
+            {
+                Task.Run(() => MotionDetectionLoop(_mediaPlayer3, _bgSubtractor1, 1));
+            };
+
+            _mediaPlayer4.Playing += (s, e) =>
+            {
+                Task.Run(() => MotionDetectionLoop(_mediaPlayer4, _bgSubtractor2, 2));
+            };
         }
 
-        private async Task MotionDetectionLoop(MediaPlayer _mediaPlayer, BackgroundSubtractorMOG2 bg, int camId)
+        private async Task MotionDetectionLoop(MediaPlayer workerPlayer, BackgroundSubtractorMOG2 bg, int camId)
         {
             int warmup = 0;
 
@@ -195,18 +170,20 @@ namespace home_cctv_system
             {
                 try
                 {
-                    if (ForceMuted)
+
+                    // Use the workerPlayer (recorder / snapshot player) for snapshots
+                    string tempPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".png");
+                    workerPlayer.TakeSnapshot(0, tempPath, 320, 0);
+
+                    using var mat = Cv2.ImRead(tempPath, ImreadModes.Color);
+                    try { File.Delete(tempPath); } catch { /* ignore */ }
+
+                    if (mat.Empty())
                     {
-                        _mediaPlayer1.Mute = true;
-                        _mediaPlayer2.Mute = true;
+                        await Task.Delay(SnapshotIntervalMs);
+                        continue;
                     }
 
-                    string tempPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".png");
-                    _mediaPlayer.TakeSnapshot(0, tempPath, 320, 0);
-                    using var mat = Cv2.ImRead(tempPath, ImreadModes.Color);
-                    File.Delete(tempPath);
-
-                    if (mat.Empty()) { await Task.Delay(SnapshotIntervalMs); continue; }
                     Cv2.Resize(mat, mat, new OpenCvSharp.Size(320, mat.Height * 320 / mat.Width));
 
                     using var fgMask = new Mat();
@@ -240,18 +217,22 @@ namespace home_cctv_system
                         if (camId == 1 && !recording1)
                         {
                             recording1 = true;
-                            string output = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), $"video_recordings\\cam1\\camera1_{DateTime.Now:yyyyMMdd_HHmmss}.mp4");
+                            string output = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), $"video_recordings\\cam1\\camera1_{DateTime.Now:yyyyMMdd_HHmmss}.mkv");
                             _ = Task.Run(async () => { await RecordClip(cam1_path, output, 30, 1); recording1 = false; });
                         }
                         if (camId == 2 && !recording2)
                         {
                             recording2 = true;
-                            string output = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), $"video_recordings\\cam2\\camera2_{DateTime.Now:yyyyMMdd_HHmmss}.mp4");
+                            string output = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), $"video_recordings\\cam2\\camera2_{DateTime.Now:yyyyMMdd_HHmmss}.mkv");
                             _ = Task.Run(async () => { await RecordClip(cam2_path, output, 30, 2); recording2 = false; });
                         }
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    // Swallowing exceptions is dangerous; at least log to console for debugging.
+                    Console.WriteLine($"MotionDetectionLoop error (cam {camId}): {ex.Message}");
+                }
 
                 await Task.Delay(SnapshotIntervalMs);
             }
@@ -259,21 +240,45 @@ namespace home_cctv_system
 
         private async Task RecordClip(string rtspUrl, string outputPath, int seconds, int camId)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
-            outputPath = Path.ChangeExtension(outputPath, ".mkv");
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
+                outputPath = Path.ChangeExtension(outputPath, ".mkv");
 
-            LibVLC selectedVlc = camId == 1 ? _libVLC1 : _libVLC2;
-            using var media = new Media(selectedVlc, rtspUrl, FromType.FromLocation);
-            media.AddOption(":rtsp-tcp");
-            media.AddOption(":network-caching=1000");
-            media.AddOption($":sout=#duplicate{{dst=std{{access=file,mux=mkv,dst=\"{outputPath}\"}}}}");
-            media.AddOption(":sout-all");
-            media.AddOption(":sout-keep");
+                // Choose the recorder's LibVLC (libVLC3/libVLC4) - we will create a fresh Media object on that instance.
+                LibVLC selectedVlc = camId == 1 ? _libVLC3 : _libVLC4;
 
-            using var recorder = new MediaPlayer(selectedVlc);
-            recorder.Play(media);
-            await Task.Delay(seconds * 1000);
-            recorder.Stop();
+                string relay = camId == 1 ? "http://127.0.0.1:9101" : "http://127.0.0.1:9102";
+                using var media = new Media(selectedVlc, relay, FromType.FromLocation);
+                media.AddOption(":rtsp-tcp");
+                media.AddOption(":network-caching=1000");
+
+                // Use VLC streaming output to write file (copy streams)
+                // Mux to mkv container
+                media.AddOption($":sout=#duplicate{{dst=std{{access=file,mux=mkv,dst=\"{outputPath}\"}}}}");
+                media.AddOption(":sout-keep");
+                media.AddOption(":sout-all");
+
+                using var recorderPlayer = new MediaPlayer(selectedVlc);
+
+                // Start recorder on the recorderPlayer
+                var playOk = recorderPlayer.Play(media);
+                if (!playOk)
+                {
+                    Console.WriteLine($"Recorder failed to start for cam{camId}");
+                }
+
+                // Wait requested seconds (non-blocking)
+                await Task.Delay(seconds * 1000);
+
+                // Stop and dispose recorder
+                recorderPlayer.Stop();
+                recorderPlayer.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"RecordClip error (cam {camId}): {ex.Message}");
+            }
         }
 
         // Button event handlers
@@ -293,62 +298,36 @@ namespace home_cctv_system
 
         private void Button_Click3(object sender, EventArgs e)
         {
- 
             ShowRecordedViewRequested?.Invoke();
         }
 
         private void Button_Click4(object sender, EventArgs e)
         {
-            // Raise event to MainForm to switch to RecordedView
             ShowRecordedViewRequested?.Invoke();
-        }
-
-        public void MuteAll(bool mute)
-        {
-
-            if (_mediaPlayer1 != null) _mediaPlayer1.Mute = mute;
-            if (_mediaPlayer2 != null) _mediaPlayer2.Mute = mute;
-        }
-
-        public void ForceMute(bool mute)
-        {
-            if (_mediaPlayer1 != null)
-            {
-                _mediaPlayer1.Mute = mute;
-                _mediaPlayer1.Volume = mute ? 0 : volumeBar1.Value; // enforce volume level
-            }
-
-            if (_mediaPlayer2 != null)
-            {
-                _mediaPlayer2.Mute = mute;
-                _mediaPlayer2.Volume = mute ? 0 : volumeBar2.Value; // enforce volume level
-            }
-        }
-
-        public void RefreshAudio()
-        {
-            if (_mediaPlayer1 != null)
-            {
-                _mediaPlayer1.Mute = false;
-                _mediaPlayer1.Volume = volumeBar1.Value;
-            }
-
-            if (_mediaPlayer2 != null)
-            {
-                _mediaPlayer2.Mute = false;
-                _mediaPlayer2.Volume = volumeBar2.Value;
-            }
         }
 
         public void DisposePlayers()
         {
             _running = false;
-            _mediaPlayer1?.Stop();
-            _mediaPlayer2?.Stop();
+
+            try
+            {
+                _mediaPlayer1?.Stop();
+                _mediaPlayer2?.Stop();
+                _mediaPlayer3?.Stop();
+                _mediaPlayer4?.Stop();
+            }
+            catch { /* ignore */ }
+
             _mediaPlayer1?.Dispose();
             _mediaPlayer2?.Dispose();
+            _mediaPlayer3?.Dispose();
+            _mediaPlayer4?.Dispose();
+
             _libVLC1?.Dispose();
             _libVLC2?.Dispose();
+            _libVLC3?.Dispose();
+            _libVLC4?.Dispose();
         }
     }
 }
